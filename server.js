@@ -11,7 +11,14 @@ const notarizationRoutes = require("./routes/notarization");
 
 const app = express();
 
-app.use(cors());
+const corsConfig = {
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+};
+
+app.use(cors(corsConfig));
 app.use(express.json());
 app.use('/auth', authRoutes);
 app.use("/documents", documentRoutes);
@@ -38,25 +45,7 @@ app.get('/test-db', async (req, res) => {
   }
 });
 
-app.post('/notarize', async (req, res) => {
-  const { wallet_address, doc_hash, tx_hash } = req.body;
-  if (!wallet_address || !doc_hash || !tx_hash) {
-    return res.status(400).json({ error: 'wallet_address, doc_hash and tx_hash are required' });
-  }
-
-  try {
-    await pool.query(
-      'INSERT INTO notarizations (wallet_address, doc_hash, tx_hash) VALUES ($1, $2, $3)',
-      [wallet_address, doc_hash, tx_hash],
-    );
-
-    res.json({ message: 'Stored successfully' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/applicants', async (req, res) => {
+app.post('/applicants', authenticate, async (req, res) => {
   const {
     first_name,
     middle_name,
@@ -73,12 +62,27 @@ app.post('/applicants', async (req, res) => {
     });
   }
 
+  // Prevent saving applicant details for a different account.
+  if (req.user && req.user.email && email !== req.user.email) {
+    return res.status(403).json({ error: 'Email does not match logged-in user' });
+  }
+
   try {
     await pool.query(
       `INSERT INTO applicants
-        (first_name, middle_name, last_name, aadhaar, email, pan, phone)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        (user_id, first_name, middle_name, last_name, aadhaar, email, pan, phone)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (user_id) DO UPDATE SET
+         first_name = EXCLUDED.first_name,
+         middle_name = EXCLUDED.middle_name,
+         last_name = EXCLUDED.last_name,
+         aadhaar = EXCLUDED.aadhaar,
+         email = EXCLUDED.email,
+         pan = EXCLUDED.pan,
+         phone = EXCLUDED.phone,
+         updated_at = NOW()`,
       [
+        req.user.id,
         first_name,
         middle_name || null,
         last_name,
@@ -95,10 +99,37 @@ app.post('/applicants', async (req, res) => {
   }
 });
 
+async function ensureApplicantsTable() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS applicants (
+      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      first_name VARCHAR(100) NOT NULL,
+      middle_name VARCHAR(100),
+      last_name VARCHAR(100) NOT NULL,
+      aadhaar VARCHAR(12) NOT NULL,
+      email VARCHAR(150) NOT NULL,
+      pan VARCHAR(10),
+      phone VARCHAR(20),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+}
+
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
-  // eslint-disable-next-line no-console
-  console.log(`Server running on port ${PORT}`);
-});
+(async () => {
+  try {
+    await ensureApplicantsTable();
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to ensure applicants table:', err);
+    process.exit(1);
+  }
+
+  app.listen(PORT, () => {
+    // eslint-disable-next-line no-console
+    console.log(`Server running on port ${PORT}`);
+  });
+})();
 

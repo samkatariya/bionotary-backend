@@ -4,6 +4,9 @@ function authenticate(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader) {
+    // Debugging aid: quickly identify which endpoint is missing Authorization.
+    // eslint-disable-next-line no-console
+    console.log(`[authMiddleware] Missing Authorization header for ${req.method} ${req.originalUrl}`);
     return res.status(401).json({ message: "No token provided" });
   }
 
@@ -14,6 +17,8 @@ function authenticate(req, res, next) {
     req.user = decoded;
     next();
   } catch (err) {
+    // eslint-disable-next-line no-console
+    console.log(`[authMiddleware] Invalid token for ${req.method} ${req.originalUrl}. Received header: ${authHeader}`);
     return res.status(401).json({ message: "Invalid token" });
   }
 }
