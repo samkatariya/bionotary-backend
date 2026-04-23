@@ -1,0 +1,15 @@
+[Unit]
+Description=BioNotary fingerprint mock (replace with R307 serial service in production)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bionotary-backend
+Environment=FP_BIND=127.0.0.1
+Environment=FP_PORT=8765
+ExecStart=/usr/bin/node fingerprint/mockServer.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

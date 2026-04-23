@@ -1,0 +1,20 @@
+[Unit]
+Description=BioNotary R307 fingerprint serial bridge
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bionotary-backend
+Environment=FP_BIND=127.0.0.1
+Environment=FP_PORT=8765
+Environment=FP_SERIAL_PORT=/dev/ttyAMA0
+Environment=FP_BAUD_RATE=57600
+Environment=FP_SENSOR_ADDR=0xFFFFFFFF
+Environment=FP_SENSOR_PASS=0x00000000
+Environment=FP_DB_FILE=/opt/bionotary-backend/fingerprint/fingerprint_db.json
+ExecStart=/usr/bin/python3 /opt/bionotary-backend/fingerprint/r307_service.py
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

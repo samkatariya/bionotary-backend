@@ -1,18 +1,24 @@
 const express = require('express');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
 
 const pool = require('./db');
 const authRoutes = require('./routes/auth');
 const authenticate = require('./middleware/authMiddleware');
-
-const documentRoutes = require("./routes/document");
-const notarizationRoutes = require("./routes/notarization");
+const documentRoutes = require('./routes/document');
+const notarizationRoutes = require('./routes/notarization');
+const biometricAuthRoutes = require('./routes/biometricAuth');
+const { ensureSchema } = require('./db/ensureSchema');
 
 const app = express();
 
+const allowedOrigins = process.env.ALLOWED_ORIGINS;
 const corsConfig = {
-  origin: true,
+  origin:
+    allowedOrigins && allowedOrigins.trim()
+      ? allowedOrigins.split(',').map((s) => s.trim())
+      : true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
@@ -20,9 +26,19 @@ const corsConfig = {
 
 app.use(cors(corsConfig));
 app.use(express.json());
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use('/auth', authLimiter);
 app.use('/auth', authRoutes);
-app.use("/documents", documentRoutes);
-app.use("/notarizations", notarizationRoutes);
+app.use('/auth/fingerprint', biometricAuthRoutes);
+app.use('/documents', documentRoutes);
+app.use('/notarizations', notarizationRoutes);
 
 app.get('/', (req, res) => {
   res.send('BioNotary Backend Running');
@@ -31,19 +47,20 @@ app.get('/', (req, res) => {
 app.get('/profile', authenticate, async (req, res) => {
   res.json({
     message: 'Access granted',
-    user: req.user
+    user: req.user,
   });
 });
 
-app.get('/test-db', async (req, res) => {
-  try {
-    const result = await pool.query('SELECT NOW()');
-    res.json(result.rows);
-  } catch (err) {
-    // For now, surface the error message to help debugging.
-    res.status(500).json({ error: err.message });
-  }
-});
+if (process.env.NODE_ENV !== 'production') {
+  app.get('/test-db', async (req, res) => {
+    try {
+      const result = await pool.query('SELECT NOW()');
+      res.json(result.rows);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+}
 
 app.post('/applicants', authenticate, async (req, res) => {
   const {
@@ -62,7 +79,6 @@ app.post('/applicants', authenticate, async (req, res) => {
     });
   }
 
-  // Prevent saving applicant details for a different account.
   if (req.user && req.user.email && email !== req.user.email) {
     return res.status(403).json({ error: 'Email does not match logged-in user' });
   }
@@ -99,37 +115,45 @@ app.post('/applicants', authenticate, async (req, res) => {
   }
 });
 
-async function ensureApplicantsTable() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS applicants (
-      user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
-      first_name VARCHAR(100) NOT NULL,
-      middle_name VARCHAR(100),
-      last_name VARCHAR(100) NOT NULL,
-      aadhaar VARCHAR(12) NOT NULL,
-      email VARCHAR(150) NOT NULL,
-      pan VARCHAR(10),
-      phone VARCHAR(20),
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
-}
-
 const PORT = process.env.PORT || 5000;
 
-(async () => {
-  try {
-    await ensureApplicantsTable();
-  } catch (err) {
-    // eslint-disable-next-line no-console
-    console.error('Failed to ensure applicants table:', err);
-    process.exit(1);
-  }
-
+async function start() {
+  await ensureSchema();
   app.listen(PORT, () => {
     // eslint-disable-next-line no-console
     console.log(`Server running on port ${PORT}`);
   });
-})();
+}
 
+function isConnectionRefused(err) {
+  if (!err) return false;
+  if (err.code === 'ECONNREFUSED') return true;
+  if (err.name === 'AggregateError' && Array.isArray(err.errors)) {
+    return err.errors.some((e) => e && e.code === 'ECONNREFUSED');
+  }
+  return false;
+}
+
+if (require.main === module) {
+  start().catch((err) => {
+    if (isConnectionRefused(err)) {
+      const host = process.env.DB_HOST || 'localhost';
+      const dbPort = process.env.DB_PORT || '5432';
+      // eslint-disable-next-line no-console
+      console.error(`
+PostgreSQL refused the connection (${host}:${dbPort}).
+
+- Start PostgreSQL, or run from this project folder:
+    docker compose up -d
+  (Uses postgres / yourpassword / bionotary — match DB_* in your .env)
+
+- WSL: ensure Postgres runs in the same environment as \`node\`, or set DB_HOST to the host IP that runs Docker.
+`);
+    }
+    // eslint-disable-next-line no-console
+    console.error('Failed to start:', err);
+    process.exit(1);
+  });
+}
+
+module.exports = app;

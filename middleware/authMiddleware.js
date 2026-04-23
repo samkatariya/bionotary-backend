@@ -10,7 +10,20 @@ function authenticate(req, res, next) {
     return res.status(401).json({ message: "No token provided" });
   }
 
+  if (!authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({
+      message: "Invalid authorization format",
+      code: "AUTH_HEADER_INVALID",
+    });
+  }
+
   const token = authHeader.split(" ")[1];
+  if (!token) {
+    return res.status(401).json({
+      message: "No token provided",
+      code: "AUTH_TOKEN_MISSING",
+    });
+  }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -18,8 +31,14 @@ function authenticate(req, res, next) {
     next();
   } catch (err) {
     // eslint-disable-next-line no-console
-    console.log(`[authMiddleware] Invalid token for ${req.method} ${req.originalUrl}. Received header: ${authHeader}`);
-    return res.status(401).json({ message: "Invalid token" });
+    console.log(`[authMiddleware] ${err.name} for ${req.method} ${req.originalUrl}. Received header: ${authHeader}`);
+    if (err.name === "TokenExpiredError") {
+      return res.status(401).json({
+        message: "Token expired. Please login again.",
+        code: "TOKEN_EXPIRED",
+      });
+    }
+    return res.status(401).json({ message: "Invalid token", code: "TOKEN_INVALID" });
   }
 }
 

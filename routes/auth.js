@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const pool = require("../db");
 
 const router = express.Router();
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
 
 /* REGISTER */
 router.post("/register", async (req, res) => {
@@ -73,12 +74,13 @@ router.post("/login", async (req, res) => {
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" }
+      { expiresIn: JWT_EXPIRES_IN }
     );
 
     res.json({
       message: "Login successful",
       token,
+      expires_in: JWT_EXPIRES_IN,
     });
 
   } catch (err) {

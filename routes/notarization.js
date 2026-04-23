@@ -1,6 +1,7 @@
 const express = require("express");
 const pool = require("../db");
 const authenticate = require("../middleware/authMiddleware");
+const { verifyNotarizationOnChain } = require("../lib/verifyNotarizationTx");
 
 const router = express.Router();
 
@@ -29,14 +30,38 @@ router.post("/", authenticate, async (req, res) => {
     }
 
     const docCheck = await pool.query(
-      "SELECT id FROM documents WHERE id = $1 AND owner_id = $2",
-      [document_id, req.user.id]
+      "SELECT id, sha256_hash FROM documents WHERE id = $1 AND owner_id = $2",
+      [document_id, req.user.id],
     );
     if (docCheck.rows.length === 0) {
       return res.status(404).json({
         message:
           "No document with this id for your account. Use GET /documents/my-documents with the same JWT and send the exact id from that response.",
       });
+    }
+
+    const sha256Hash = docCheck.rows[0].sha256_hash;
+    const rpcUrl = process.env.ETH_RPC_URL;
+    const envContract = process.env.BIONOTARY_CONTRACT_ADDRESS;
+    const contractForVerify = envContract || contract_address;
+    let verifiedOnChain = false;
+    let chainDetail = null;
+
+    if (rpcUrl && contractForVerify) {
+      try {
+        chainDetail = await verifyNotarizationOnChain({
+          rpcUrl,
+          contractAddress: contractForVerify,
+          transactionHash: tx,
+          documentSha256Hex: sha256Hash,
+        });
+        verifiedOnChain = true;
+      } catch (verErr) {
+        return res.status(400).json({
+          message: "On-chain verification failed",
+          detail: verErr.message,
+        });
+      }
     }
 
     const result = await pool.query(
@@ -51,9 +76,9 @@ router.post("/", authenticate, async (req, res) => {
         blockchain_network,
         contract_address,
         tx,
-        block_number,
-        gas_used
-      ]
+        chainDetail != null ? chainDetail.blockNumber : block_number,
+        gas_used,
+      ],
     );
 
     // Update document status
@@ -61,12 +86,13 @@ router.post("/", authenticate, async (req, res) => {
       `UPDATE documents 
        SET notarization_status = 'confirmed'
        WHERE id = $1`,
-      [document_id]
+      [document_id],
     );
 
     res.status(201).json({
       message: "Notarization stored",
-      notarization: result.rows[0]
+      notarization: result.rows[0],
+      verified_on_chain: verifiedOnChain,
     });
 
   } catch (err) {
